@@ -1,0 +1,28 @@
+mlflow:
+  server:
+    host: "0.0.0.0"
+    port: 5000
+    workers: 2  # Limited workers for free tier
+  tracking:
+    # Using MongoDB free tier for backend store
+    backend_store_uri: ${MLFLOW_BACKEND_STORE_URI}
+    # Using OCI object storage for artifact store
+    default_artifact_root: ${MLFLOW_ARTIFACT_ROOT}
+  database:
+    pool_size: 5
+    max_overflow: 10
+    pool_timeout: 30
+  memory:
+    # Memory limits for free tier
+    heap_size: "1g"
+    meta_store_size: "512m"
+  logging:
+    level: INFO
+    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    file: "/var/log/mlflow/server.log"
+  optimization:
+    # Optimize for low memory usage
+    artifact_upload_chunk_size: 5242880  # 5MB chunks
+    max_batch_size: 100
+    cache_size: 512  # MB
+    cleanup_interval: 86400  # 24 hour

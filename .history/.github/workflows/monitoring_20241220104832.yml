@@ -1,0 +1,156 @@
+name: 'Infrastructure Monitoring'
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Every 15 minutes
+  workflow_dispatch:
+
+env:
+  TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+  TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+  TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+  TF_VAR_region: ${{ secrets.OCI_REGION }}
+  
+jobs:
+  check-services:
+    name: 'Service Health Check'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OCI CLI
+        run: |
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+      - name: Check MLflow
+        id: mlflow
+        continue-on-error: true
+        run: |
+          status_code=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.MLFLOW_URL }}/health)
+          if [ $status_code -ne 200 ]; then
+            echo "MLflow is down (Status: $status_code)"
+            exit 1
+          fi
+
+      - name: Check Qdrant
+        id: qdrant
+        continue-on-error: true
+        run: |
+          status_code=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.QDRANT_URL }}/health)
+          if [ $status_code -ne 200 ]; then
+            echo "Qdrant is down (Status: $status_code)"
+            exit 1
+          fi
+
+      - name: Notify if Services Down
+        if: ${{ failure() }}
+        uses: ravsamhq/notify-slack-action@v2
+        with:
+          status: ${{ job.status }}
+          notification_title: "Service Health Alert"
+          message_format: "🚨 Service Health Check Failed\nMLflow: ${{ steps.mlflow.outcome }}\nQdrant: ${{ steps.qdrant.outcome }}"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  check-resources:
+    name: 'Resource Usage Check'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OCI CLI
+        run: |
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+      - name: Check ARM Instance Usage
+        id: compute
+        run: |
+          python3 scripts/monitoring/check_resources.py \
+            --max-ocpus 1 \
+            --max-memory-gb 6 \
+            --max-instances 4
+
+      - name: Check Storage Usage
+        id: storage
+        run: |
+          python3 scripts/monitoring/check_storage.py \
+            --max-gb 200 \
+            --alert-threshold 0.8
+
+      - name: Notify on Resource Issues
+        if: ${{ failure() }}
+        uses: ravsamhq/notify-slack-action@v2
+        with:
+          status: ${{ job.status }}
+          notification_title: "Resource Usage Alert"
+          message_format: "⚠️ Resource Limits Warning\nCompute: ${{ steps.compute.outcome }}\nStorage: ${{ steps.storage.outcome }}"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  check-metrics:
+    name: 'Performance Metrics'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect MLflow Metrics
+        id: mlflow-metrics
+        continue-on-error: true
+        run: |
+          python3 scripts/monitoring/collect_metrics.py \
+            --service mlflow \
+            --url ${{ secrets.MLFLOW_URL }} \
+            --output mlflow_metrics.json
+
+      - name: Collect Qdrant Metrics
+        id: qdrant-metrics
+        continue-on-error: true
+        run: |
+          python3 scripts/monitoring/collect_metrics.py \
+            --service qdrant \
+            --url ${{ secrets.QDRANT_URL }} \
+            --output qdrant_metrics.json
+
+      - name: Alert on Performance Issues
+        if: ${{ failure() }}
+        uses: ravsamhq/notify-slack-action@v2
+        with:
+          status: ${{ job.status }}
+          notification_title: "Performance Alert"
+          message_format: "📉 Performance Issues Detected\n{message}"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  cleanup-check:
+    name: 'Cleanup Check'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OCI CLI
+        run: |
+          mkdir -p ~/.oci
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+      - name: Check for Cleanup Needs
+        id: cleanup
+        run: |
+          python3 scripts/monitoring/check_cleanup.py \
+            --max-age-days 7 \
+            --min-free-space-gb 50 \
+            --output cleanup_report.json
+
+      - name: Notify on Cleanup Needs
+        if: ${{ failure() }}
+        uses: ravsamhq/notify-slack-action@v2
+        with:
+          status: warning
+          notification_title: "Cleanup Needed"
+          message_format: "♻️ Resource Cleanup Required\nCheck cleanup_report.json for details"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

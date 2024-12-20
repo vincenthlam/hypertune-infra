@@ -1,0 +1,48 @@
+server:
+  http_port: 3000
+  http_addr: 0.0.0.0
+  root_url: ${GRAFANA_ROOT_URL}
+  # Optimize for free tier
+  max_connections: 100
+
+database:
+  type: sqlite3
+  path: grafana.db
+
+security:
+  admin_user: ${GRAFANA_ADMIN_USER}
+  admin_password: ${GRAFANA_ADMIN_PASSWORD}
+  disable_gravatar: true
+  cookie_secure: true
+
+users:
+  allow_sign_up: false
+  auto_assign_org: true
+  auto_assign_org_role: Viewer
+
+# Memory optimization
+memory:
+  chunks_cache_size: 100  # MB
+  results_cache_size: 1000
+  history_cache_size: 100  # MB
+
+# Caching strategy
+caching:
+  enabled: true
+  ttl: 600  # 10 minutes
+  memory_store:
+    max_size: 500  # MB
+
+# Resource limits
+quota:
+  enabled: true
+  org_user: 10
+  org_dashboard: 100
+  org_data_source: 10
+  org_alert_rule: 100
+  global_user: 10
+  global_org: 5
+
+analytics:
+  reporting_enabled: false
+  check_for_updates: false

@@ -1,0 +1,121 @@
+name: 'Infrastructure Security'
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight
+  pull_request:
+    paths:
+      - 'terraform/**'
+      - 'config/**'
+  workflow_dispatch:
+
+jobs:
+  tfsec:
+    name: 'TFSec Scan'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run tfsec
+      uses: aquasecurity/tfsec-action@v1.0.0
+      with:
+        soft_fail: true
+        working_directory: terraform
+        format: sarif
+        out: tfsec.sarif
+        config_file: config/security/tfsec.yaml
+
+    - name: Upload SARIF file
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: tfsec.sarif
+
+  checkov:
+    name: 'Checkov Scan'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run Checkov
+      uses: bridgecrewio/checkov-action@master
+      with:
+        directory: terraform
+        framework: terraform
+        skip_check: CKV_AWS_1,CKV_AWS_2  # Skip irrelevant checks
+        output_format: cli,sarif
+        output_file_path: console,checkov.sarif
+        soft_fail: true
+
+    - name: Upload SARIF file
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: checkov.sarif
+
+  secret-scan:
+    name: 'Secret Scanning'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Gitleaks
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITLEAKS_CONFIG: config/security/gitleaks.toml
+        GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  security-check:
+    name: 'Security Check'
+    runs-on: ubuntu-latest
+    needs: [tfsec, checkov, secret-scan]
+    if: always()
+    
+    steps:
+    - name: Check Security Results
+      run: |
+        if [[ "${{ needs.tfsec.result }}" == "failure" || \
+              "${{ needs.checkov.result }}" == "failure" || \
+              "${{ needs.secret-scan.result }}" == "failure" ]]; then
+          echo "Security checks failed"
+          exit 1
+        fi
+
+    - name: Security Alert
+      if: failure()
+      uses: ravsamhq/notify-slack-action@v2
+      with:
+        status: ${{ job.status }}
+        notification_title: "Security Alert"
+        message_format: "🚨 *Security Issue Detected*\n{message}"
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  permissions:
+    name: 'Permission Check'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup OCI CLI
+      run: |
+        mkdir -p ~/.oci
+        echo "${{ secrets.OCI_PRIVATE_KEY }}" > ~/.oci/oci_api_key.pem
+        chmod 600 ~/.oci/oci_api_key.pem
+
+    - name: Check OCI Permissions
+      run: |
+        python3 scripts/security/check_permissions.py \
+          --config config/security/permissions.yaml
+
+    - name: Verify Security Groups
+      run: |
+        python3 scripts/security/verify_security.py \
+          --config config/security/security_groups.yaml
+
+    - name: Check Network ACLs
+      run: |
+        python3 scripts/security/check_acls.py \
+          --config config/security/network_acls.yaml

@@ -1,0 +1,27 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+.terraformrc
+terraform.rc
+.terraform.lock.hcl
+
+# Environment
+.env
+*.env
+
+# System
+.DS_Store
+*.swp
+*.swo
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Local configs
+config/local/

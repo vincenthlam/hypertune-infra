@@ -1,0 +1,31 @@
+storage:
+  storage_path: "/var/lib/qdrant"
+  # Optimized for free tier ARM instance
+  max_memory_usage_gb: 4
+  max_optimization_threads: 2
+  update_rate_limit: 100  # requests per second
+
+service:
+  host: "0.0.0.0"
+  port: 6333
+  # Enable read-only mode if memory exceeds 80%
+  max_memory_usage_percentage: 80
+
+vectors:
+  vector_size: 768
+  distance: "Cosine"
+  # Use memory mapping for larger datasets
+  memory_mapping: true
+  cache_size_mb: 512
+
+optimization:
+  # Batch operations for efficiency
+  max_batch_size: 100
+  indexing_threshold: 20000
+  # Vacuum settings
+  vacuum_interval_hours: 24
+  cleanup_interval_hours: 12
+
+monitoring:
+  health_check_interval: 60
+  telemetry_disabled: true
