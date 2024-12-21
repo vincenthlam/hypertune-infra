@@ -1,0 +1,34 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  - job_name: "mlflow"
+    static_configs:
+      - targets: ["localhost:5000"]
+    metrics_path: "/metrics"
+    scrape_interval: 30s
+
+  - job_name: "qdrant"
+    static_configs:
+      - targets: ["localhost:6333"]
+    metrics_path: "/metrics"
+    scrape_interval: 30s
+
+  - job_name: "node"
+    static_configs:
+      - targets: ["localhost:9100"]
+    scrape_interval: 30s
+
+# Storage settings for optimized retention
+storage:
+  tsdb:
+    retention_time: 7d
+    max_block_duration: 2h
+    min_block_duration: 2h
+    wal_compression: true
+
+# Runtime resource limits (if supported by your Prometheus version)
+limits:
+  memory_chunks: 1048576 # 1M chunks
+  max_samples_per_chunk: 120

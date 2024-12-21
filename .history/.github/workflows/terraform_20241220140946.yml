@@ -1,0 +1,96 @@
+name: 'MLOps Platform CI/CD'
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy (dev or prod)"
+        required: true
+        default: "dev"
+
+env:
+  TF_LOG: INFO
+
+jobs:
+  validate:
+    name: Validate Configuration
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: bash scripts/setup/install_deps.sh
+
+    - name: Verify Setup
+      run: bash scripts/setup/verify_setup.sh
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: "1.6.0"
+
+    - name: Terraform Free Tier Compliance
+      run: python3 scripts/check_free_tier.py ./terraform/environments/${{ github.event.inputs.environment }}/main.tf
+
+    - name: Terraform Init
+      run: |
+        terraform init \
+          -backend-config="bucket=${{ secrets.OCI_STATE_BUCKET }}" \
+          -backend-config="key=${{ github.event.inputs.environment }}/terraform.tfstate" \
+          -backend-config="region=${{ secrets.OCI_REGION }}"
+      working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+
+    - name: Terraform Plan
+      id: plan
+      run: terraform plan -out=plan.out
+      working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+
+    - name: Upload Terraform Plan
+      uses: actions/upload-artifact@v3
+      with:
+        name: terraform-plan
+        path: ./terraform/environments/${{ github.event.inputs.environment }}/plan.out
+
+  deploy:
+    name: Deploy Infrastructure
+    needs: validate
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Install Dependencies
+      run: bash scripts/setup/install_deps.sh
+
+    - name: Setup OCI CLI
+      run: |
+        mkdir -p ~/.oci
+        echo "${{ secrets[format('{0}_OCI_PRIVATE_KEY', github.event.inputs.environment.toUpperCase())] }}" > ~/.oci/oci_api_key.pem
+        chmod 600 ~/.oci/oci_api_key.pem
+
+    - name: Terraform Apply
+      run: terraform apply -auto-approve plan.out
+      working-directory: ./terraform/environments/${{ github.event.inputs.environment }}
+
+    - name: Verify Services
+      run: python3 scripts/verify_services.py \
+          --mlflow-url=${{ secrets.MLFLOW_TRACKING_URI }} \
+          --qdrant-url=${{ secrets.QDRANT_URL }} \
+          --cache-url=${{ secrets.CACHE_URL }}
+
+  notify:
+    name: Notify Deployment Status
+    needs: deploy
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Notify via Slack
+      uses: ravsamhq/notify-slack-action@v2
+      with:
+        status: ${{ job.status }}
+        message_format: ":rocket: *{workflow}* `{status_message}` for ${{ github.event.inputs.environment }}"
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

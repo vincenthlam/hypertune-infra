@@ -1,0 +1,100 @@
+name: 'Infrastructure Monitoring'
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Every 15 minutes
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to monitor (dev or prod)"
+        required: true
+        default: "dev"
+
+env:
+  TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+  TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+  TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+  TF_VAR_region: ${{ secrets.OCI_REGION }}
+
+jobs:
+  check-services:
+    name: 'Service Health Check'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OCI CLI
+        run: |
+          mkdir -p ~/.oci
+          echo "${{ secrets[format('{0}_OCI_PRIVATE_KEY', github.event.inputs.environment.toUpperCase())] }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+      - name: Check Service Health
+        id: service-health
+        run: |
+          for service in mlflow qdrant; do
+            status_code=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets[format('{0}_URL', service.toUpperCase())] }}/health)
+            if [ $status_code -ne 200 ]; then
+              echo "${service} is down (Status: $status_code)"
+              exit 1
+            fi
+            echo "${service} is healthy"
+          done
+        continue-on-error: true
+
+      - name: Notify if Services Down
+        if: ${{ failure() }}
+        uses: ravsamhq/notify-slack-action@v2
+        with:
+          status: ${{ job.status }}
+          notification_title: "Service Health Alert"
+          message_format: "🚨 *Service Health Alert*\nEnvironment: ${{ github.event.inputs.environment }}\n{message}"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  resource-checks:
+    name: 'Resource Usage Check'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OCI CLI
+        run: |
+          mkdir -p ~/.oci
+          echo "${{ secrets[format('{0}_OCI_PRIVATE_KEY', github.event.inputs.environment.toUpperCase())] }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+
+      - name: Check Resources
+        run: python3 scripts/monitoring/check_resources.py \
+            --max-ocpus 1 --max-memory-gb 6 --max-instances 4
+
+      - name: Notify on Resource Issues
+        if: ${{ failure() }}
+        uses: ravsamhq/notify-slack-action@v2
+        with:
+          status: ${{ job.status }}
+          notification_title: "Resource Usage Alert"
+          message_format: "⚠️ Resource Limits Warning\n{message}"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  collect-metrics:
+    name: 'Collect Metrics'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Collect Metrics
+        run: |
+          for service in mlflow qdrant; do
+            python3 scripts/monitoring/collect_metrics.py \
+              --service $service \
+              --url ${{ secrets[format('{0}_URL', service.toUpperCase())] }} \
+              --output ${service}_metrics.json
+          done
+
+      - name: Upload Metrics
+        uses: actions/upload-artifact@v3
+        with:
+          name: collected-metrics
+          path: "*.json"
